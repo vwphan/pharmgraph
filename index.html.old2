@@ -1,0 +1,45 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>LiteGraph Final Project</title>
+    <meta charset="UTF-8">
+    <style>
+        html, body { width: 100%; height: 100%; margin: 0; }
+        canvas { width: 100%; height: 100%; }
+    </style>
+</head>
+<body>
+    <canvas id='mycanvas'></canvas>
+
+    <script type="text/javascript" src="litegraph.js"></script>
+
+    <script>
+        function OnboardingNode() {
+            this.properties = {
+                api_token: "" 
+            };
+            this.addWidget("text", "Paste API Token Here:", "", "api_token");
+            this.addOutput("Step 1: Instructions", "string");
+            this.addOutput("Step 2: Script", "string");
+            this.title = "Onboarding Setup";
+        }
+        LiteGraph.registerNodeType("onboarding/initial_setup", OnboardingNode);
+    </script>
+
+    <script>
+        window.addEventListener('DOMContentLoaded', (event) => {
+            var graph = new LGraph();
+            var canvas = new LGraphCanvas("#mycanvas", graph);
+            
+            // This fix works with the official version of the library
+            canvas.canvas.addEventListener('contextmenu', function(e) {
+                e.preventDefault();
+                canvas.processContextMenu(e);
+            });
+
+            graph.start();
+            console.log("✅ Final setup complete. Right-click should now work.");
+        });
+    </script>
+</body>
+</html>
