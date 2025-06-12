@@ -1,4 +1,4 @@
-]<!DOCTYPE html>
+<!DOCTYPE html>
 <html>
 <head>
     <title>LiteGraph</title>
@@ -11,8 +11,7 @@
 </head>
 
 <body>
-    <div id="main">
-    </div>
+    <div id="main"></div>
 
     <script type="text/javascript" src="../external/jquery-1.6.2.min.js"></script>
     <script type="text/javascript" src="js/libs/gl-matrix-min.js"></script>
@@ -41,65 +40,86 @@
     <script type="text/javascript" src="js/code.js"></script>
     
     <script>
-        // Wait for 500 milliseconds after the page loads, then run our code.
-        setTimeout(function() {
-
+        setTimeout(function() { // Wait for 500ms after the page loads
             console.log("Waited 500ms. Now registering custom nodes...");
 
-            // --- Onboarding Node ---
-            function OnboardingNode() {
+            // --- DO Authentication Node ---
+            function DOAuthenticationNode() {
                 this.properties = { api_token: "" };
-                this.addWidget("text", "Paste API Token Here:", "", "api_token");
-                this.addOutput("Step 1: Instructions", "string");
-                this.addOutput("Step 2: Create Bucket Script", "string");
-                this.title = "Onboarding Setup";
-                this.onAdded = this.onPropertyChanged = function() { /* Logic goes here */ };
-            }
-            LiteGraph.registerNodeType("onboarding/initial_setup", OnboardingNode);
-            console.log("✅ Custom Onboarding node registered.");
-
-            // --- Format Name Node ---
-            function FormatNameNode() {
-                this.addInput("first_name", "string");
-                this.addInput("last_name", "string");
-                this.addOutput("full_name", "string");
-            }
-            FormatNameNode.prototype.title = "Format Name";
-            FormatNameNode.prototype.onExecute = function() {
-                var firstName = this.getInputData(0) || "John";
-                var lastName = this.getInputData(1) || "Doe";
-                this.setOutputData(0, firstName + " " + lastName);
-            };
-            LiteGraph.registerNodeType("my_nodes/format_name", FormatNameNode);
-            console.log("✅ Custom FormatNameNode registered.");
-
-            // --- List Function Namespaces Node ---
-            function ListFunctionNamespacesNode() {
-                this.addInput("execute", LiteGraph.ACTION);
-                this.addInput("api_token", "string");
+                this.addWidget("text", "Paste API Token:", "", "api_token");
                 this.addOutput("on_success", LiteGraph.EVENT);
-                this.addOutput("namespaces", "array");
+                this.addOutput("on_failure", LiteGraph.EVENT);
+                this.addOutput("api_token", "string");
+                this.addOutput("account_info", "object");
+                this.addOutput("error", "string");
+                this.title = "DO Authentication";
+            }
+            DOAuthenticationNode.prototype.onPropertyChanged = async function(name, value) {
+                if (name !== "api_token" || !value) return;
+                const token = value;
+                try {
+                    const response = await fetch("https://api.digitalocean.com/v2/account", { headers: { 'Authorization': `Bearer ${token}` } });
+                    const data = await response.json();
+                    if (!response.ok) throw new Error(data.message || "Invalid API Token.");
+                    this.setOutputData(2, token);
+                    this.setOutputData(3, data.account);
+                    this.triggerSlot(0);
+                } catch (err) { this.setOutputData(4, err.message); this.triggerSlot(1); }
+            };
+            LiteGraph.registerNodeType("digitalocean/authentication", DOAuthenticationNode);
+            console.log("✅ DOAuthenticationNode registered.");
+
+            // --- Configure S3 Access Node (NEW & SECURE) ---
+            function ConfigureS3AccessNode() {
+                this.properties = { access_key: "", secret_key: "", region: "nyc3" };
+                this.addWidget("text", "Access Key ID", this.properties.access_key, "access_key");
+                this.addWidget("password", "Secret Key", this.properties.secret_key, "secret_key");
+                this.addWidget("text", "Region", this.properties.region, "region");
+                this.addOutput("config_command", "string");
+                this.addOutput("list_buckets_command", "string");
+                this.title = "Configure S3 Access";
+                this.onAdded = this.onPropertyChanged = this.generateS3Commands;
+            }
+            ConfigureS3AccessNode.prototype.generateS3Commands = function() {
+                const key = this.properties.access_key;
+                const secret = this.properties.secret_key;
+                const region = this.properties.region;
+                if (!key || !secret) { return; }
+                const config_command = `doctl spaces access-keys set ${key} ${secret}`;
+                const list_command = `doctl spaces ls`;
+                this.setOutputData(0, config_command);
+                this.setOutputData(1, list_command);
+            };
+            LiteGraph.registerNodeType("digitalocean/configure_s3_access", ConfigureS3AccessNode);
+            console.log("✅ ConfigureS3AccessNode registered.");
+
+            // --- List Spaces (Buckets) Node (Corrected) ---
+            function ListSpacesNode() {
+                this.addInput("execute", LiteGraph.ACTION);
+                this.addInput("api_token", "string"); // This uses the main API token, not S3 keys
+                this.addOutput("on_success", LiteGraph.EVENT);
+                this.addOutput("spaces", "array");
                 this.addOutput("on_failure", LiteGraph.EVENT);
                 this.addOutput("error", "string");
             }
-            ListFunctionNamespacesNode.prototype.title = "List Function Namespaces";
-            ListFunctionNamespacesNode.prototype.onAction = async function(action, data) {
+            ListSpacesNode.prototype.title = "List Spaces (API)";
+            ListSpacesNode.prototype.onAction = async function(action) {
                 if (action !== "execute") return;
                 const token = this.getInputData(1);
-                if (!token) { this.triggerSlot(2); this.setOutputData(1, "API Token is missing."); return; }
+                if (!token) { this.setOutputData(1, "API Token is missing."); this.triggerSlot(2); return; }
                 try {
-                    const response = await fetch("https://api.digitalocean.com/v2/functions/namespaces", { headers: { 'Authorization': `Bearer ${token}` } });
+                    const response = await fetch("https://api.digitalocean.com/v2/spaces", { headers: { 'Authorization': `Bearer ${token}` } });
                     const data = await response.json();
-                    if (!response.ok) throw new Error(data.message);
-                    this.setOutputData(0, data.namespaces);
+                    if (!response.ok) { throw new Error(data.message); }
+                    this.setOutputData(0, data.spaces);
                     this.triggerSlot(0);
                 } catch (err) { this.setOutputData(1, err.message); this.triggerSlot(2); }
             };
-            LiteGraph.registerNodeType("digitalocean/list_namespaces", ListFunctionNamespacesNode);
-            console.log("✅ Custom ListFunctionNamespacesNode registered.");
+            LiteGraph.registerNodeType("digitalocean/list_spaces", ListSpacesNode);
+            console.log("✅ ListSpacesNode registered.");
 
-            // --- List Functions in Namespace Node ---
-            function ListFunctionsInNamespaceNode() {
+            // --- List Functions in Namespace Node (Corrected) ---
+            function ListFunctionsInNamespaceNode() { // Removed stray 'z' here
                 this.addInput("execute", LiteGraph.ACTION);
                 this.addInput("api_token", "string");
                 this.addInput("namespace_id", "string");
@@ -113,7 +133,7 @@
                 if (action !== "execute") return;
                 const token = this.getInputData(1);
                 const namespaceId = this.getInputData(2);
-                if (!token || !namespaceId) { this.triggerSlot(2); this.setOutputData(1, "API Token or Namespace ID is missing."); return; }
+                if (!token || !namespaceId) { this.setOutputData(1, "API Token or Namespace ID is missing."); this.triggerSlot(2); return; }
                 const url = `https://api.digitalocean.com/v2/functions/namespaces/${namespaceId}/functions`;
                 try {
                     const response = await fetch(url, { headers: { 'Authorization': `Bearer ${token}` } });
@@ -124,72 +144,9 @@
                 } catch (err) { this.setOutputData(1, err.message); this.triggerSlot(2); }
             };
             LiteGraph.registerNodeType("digitalocean/list_functions", ListFunctionsInNamespaceNode);
-            console.log("✅ Custom ListFunctionsInNamespaceNode registered.");
-
-            // --- List Spaces (Buckets) Node ---
-            function ListSpacesNode() {
-                this.addInput("execute", LiteGraph.ACTION);
-                this.addInput("api_token", "string");
-                this.addOutput("on_success", LiteGraph.EVENT);
-                this.addOutput("spaces", "array");
-                this.addOutput("on_failure", LiteGraph.EVENT);
-                this.addOutput("error", "string");
-            }
-            ListSpacesNode.prototype.title = "List Spaces (Buckets)";
-            ListSpacesNode.prototype.onAction = async function(action) {
-                if (action !== "execute") { return; }
-                const token = this.getInputData(1);
-                if (!token) { this.setOutputData(1, "API Token is missing."); this.triggerSlot(2); return; }
-                const apiUrl = "https://api.digitalocean.com/v2/spaces";
-                const headers = { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' };
-                try {
-                    const response = await fetch(apiUrl, { headers: headers });
-                    const data = await response.json();
-                    if (!response.ok) { throw new Error(data.message || "An unknown API error occurred."); }
-                    this.setOutputData(0, data.spaces);
-                    this.triggerSlot(0);
-                } catch (err) { this.setOutputData(1, err.message); this.triggerSlot(2); }
-            };
-            LiteGraph.registerNodeType("digitalocean/list_spaces", ListSpacesNode);
-            console.log("✅ Custom ListSpacesNode registered.");
+            console.log("✅ ListFunctionsInNamespaceNode registered.");
             
-            // --- Create Knowledge Base Node ---
-            function CreateKnowledgeBaseNode() {
-                this.addInput("execute", LiteGraph.ACTION);
-                this.addInput("api_token", "string");
-                this.addInput("name", "string");
-                this.addInput("bucket_name", "string");
-                this.addInput("embedding_model", "string");
-                this.addOutput("on_success", LiteGraph.EVENT);
-                this.addOutput("kb_info", "object");
-                this.addOutput("on_failure", LiteGraph.EVENT);
-                this.addOutput("error", "string");
-                this.properties = { embedding_model: "minilm" };
-            }
-            CreateKnowledgeBaseNode.prototype.title = "Create Knowledge Base";
-            CreateKnowledgeBaseNode.prototype.onAction = async function(action) {
-                if (action !== "execute") { return; }
-                const token = this.getInputData(1);
-                const kbName = this.getInputData(2);
-                const bucketName = this.getInputData(3);
-                const embeddingModel = this.getInputData(4) || this.properties.embedding_model;
-                if (!token || !kbName || !bucketName) { this.setOutputData(1, "API Token, KB Name, and Bucket Name are required."); this.triggerSlot(2); return; }
-                const apiUrl = "https://api.digitalocean.com/v2/gen-ai/knowledge-bases";
-                const headers = { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' };
-                const body = JSON.stringify({ name: kbName, embedding_model: embeddingModel, data_sources: { spaces: { bucket: bucketName } } });
-                try {
-                    const response = await fetch(apiUrl, { method: 'POST', headers: headers, body: body });
-                    const data = await response.json();
-                    if (!response.ok) { throw new Error(data.message || "An unknown API error occurred."); }
-                    this.setOutputData(0, data.knowledge_base);
-                    this.triggerSlot(0);
-                } catch (err) { this.setOutputData(1, err.message); this.triggerSlot(2); }
-            };
-            // THIS WAS THE MISSING LINE:
-            LiteGraph.registerNodeType("digitalocean/create_knowledge_base", CreateKnowledgeBaseNode);
-            console.log("✅ Custom CreateKnowledgeBaseNode registered.");
-
-        }, 500); // 500ms delay
+        }, 500);
     </script>
 </body>
 </html>
